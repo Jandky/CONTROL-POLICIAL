@@ -5,3 +5,5 @@ pypdf
 python-docx
 Pillow
 pytesseract
+pdfplumber
+xlrd
