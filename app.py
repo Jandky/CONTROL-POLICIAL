@@ -5,15 +5,14 @@ import streamlit as st
 
 st.set_page_config(page_title="Control Policial de Servicios", layout="wide")
 
-st.title("👮‍♂️ Sistema de Control y Cruce con Órdenes en PDF e Imágenes")
+st.title("👮‍♂️ Control de Servicios y Horarios por Personal")
 st.write(
-    "Control operativo avanzado: soporte para múltiples servicios, horarios"
-    " múltiples y registro de novedades."
+    "Cruce directo: Identificación, Nombre, Servicio y Horas asignadas."
 )
 st.markdown("---")
 
 
-# Función mejorada para extraer texto y detectar patrones de servicios y horas en PDF
+# Función para extraer texto y asociar turnos desde PDFs
 def extraer_datos_pdf(file, df_base):
   reader = pypdf.PdfReader(file)
   texto_total = ""
@@ -23,29 +22,22 @@ def extraer_datos_pdf(file, df_base):
       texto_total += texto + "\n"
 
   lineas = [l.strip() for l in texto_total.split("\n") if l.strip()]
-
   registros_encontrados = []
 
-  # Recorrer cada efectivo del listado base para buscarlo en el texto del PDF
   for idx, row in df_base.iterrows():
-    nombre_efectivo = row["Nombre"]
+    # Identificar la columna de nombre de forma segura
+    nombre_efectivo = str(row.get("Nombre", "")).strip().upper()
     servicios_encontrados = []
     horas_encontradas = []
 
     for i, linea in enumerate(lineas):
-      if nombre_efectivo in linea:
-        # Intentar extraer contexto alrededor de la línea donde aparece el nombre
-        # Analizamos la línea actual y las líneas cercanas (arriba/abajo) para capturar servicio/hora
-        contexto_bloque = " ".join(
-            lineas[max(0, i - 1) : min(len(lineas), i + 2)]
-        )
-
-        # Detectar de forma genérica turnos u horas comunes (ej. formatos de hora como 06:00, 18:00, 08-14, etc.)
-        servicios_encontrados.append(contexto_bloque)
-        horas_encontradas.append("Ver Detalle en PDF")
+      if nombre_efectivo in linea and nombre_efectivo != "":
+        # Capturar contexto cercano en el PDF
+        contexto = " ".join(lineas[max(0, i - 1) : min(len(lineas), i + 2)])
+        servicios_encontrados.append(contexto)
+        horas_encontradas.append("Ver Oficio")
 
     if servicios_encontrados:
-      # Si tiene múltiples servicios u horarios, los unimos de forma clara con un separador
       servicio_final = " | ".join(dict.fromkeys(servicios_encontrados))
       hora_final = " | ".join(dict.fromkeys(horas_encontradas))
 
@@ -71,8 +63,8 @@ with col1:
 with col2:
   st.subheader("2. Orden del Superior (PDF o Excel)")
   file_superior = st.file_uploader(
-      "Sube la orden oficial (PDF, Excel, CSV o Imagen)",
-      type=["xlsx", "xls", "csv", "pdf", "png", "jpg", "jpeg"],
+      "Sube la orden oficial (PDF o Excel)",
+      type=["xlsx", "xls", "csv", "pdf"],
       key="superior",
   )
 
@@ -84,16 +76,32 @@ if file_base is not None and file_superior is not None:
     else:
       df_base = pd.read_excel(file_base)
 
-    col_base_nombre = next(
+    # Normalizar nombres de columnas clave en el base
+    # Buscamos variaciones comunes para Identificación y Nombre
+    col_id = next(
+        (
+            c
+            for c in df_base.columns
+            if any(k in c.lower() for k in ["id", "cedula", "placa", "nip"])
+        ),
+        None,
+    )
+    col_nombre = next(
         (c for c in df_base.columns if "nombre" in c.lower()), df_base.columns[0]
     )
-    df_base = df_base.rename(columns={col_base_nombre: "Nombre"})
+
+    if col_id:
+      df_base = df_base.rename(columns={col_id: "Identificación"})
+    else:
+      df_base["Identificación"] = "-"
+
+    df_base = df_base.rename(columns={col_nombre: "Nombre"})
     df_base["Nombre"] = df_base["Nombre"].astype(str).str.strip().str.upper()
 
     sup_name = file_superior.name.lower()
     df_sup = pd.DataFrame()
 
-    # 2. Procesar según el formato del documento superior
+    # 2. Procesar documento superior
     if sup_name.endswith((".xlsx", ".xls", ".csv")):
       if sup_name.endswith(".csv"):
         df_sup = pd.read_csv(file_superior)
@@ -106,15 +114,29 @@ if file_base is not None and file_superior is not None:
       df_sup = df_sup.rename(columns={col_sup_nombre: "Nombre"})
       df_sup["Nombre"] = df_sup["Nombre"].astype(str).str.strip().str.upper()
 
-      # Asegurar columnas de servicio y horas
-      if "Servicio" not in df_sup.columns:
-        df_sup["Servicio"] = (
-            df_sup.columns[1] if len(df_sup.columns) > 1 else "ASIGNADO"
-        )
-      if "Horas" not in df_sup.columns:
-        df_sup["Horas"] = "-"
+      # Detectar columnas de servicio y horas de forma automática
+      cols_lower = [c.lower() for c in df_sup.columns]
+      col_serv = next(
+          (
+              df_sup.columns[i]
+              for i, c in enumerate(cols_lower)
+              if "servicio" in c or "puesto" in c or "cargo" in c
+          ),
+          df_sup.columns[1] if len(df_sup.columns) > 1 else "ASIGNADO",
+      )
+      col_hora = next(
+          (
+              df_sup.columns[i]
+              for i, c in enumerate(cols_lower)
+              if "hora" in c or "turno" in c or "tiempo" in c
+          ),
+          None,
+      )
 
-      # Si el Excel superior trae múltiples filas para la misma persona, las agrupamos para conservar todos sus servicios y horas
+      df_sup["Servicio"] = df_sup[col_serv] if col_serv in df_sup else "ASIGNADO"
+      df_sup["Horas"] = df_sup[col_hora] if col_hora in df_sup else "-"
+
+      # Agrupar si hay múltiples registros por persona
       df_sup = (
           df_sup.groupby("Nombre")
           .agg({
@@ -129,25 +151,10 @@ if file_base is not None and file_superior is not None:
       )
 
     elif sup_name.endswith(".pdf"):
-      st.success(
-          f"📄 Archivo PDF detectado: **{file_superior.name}**. Analizando"
-          " servicios y horarios múltiples..."
-      )
+      st.success(f"📄 Analizando archivo PDF: **{file_superior.name}**...")
       df_sup = extraer_datos_pdf(file_superior, df_base)
 
-    elif sup_name.endswith((".png", ".jpg", ".jpeg")):
-      st.image(
-          file_superior,
-          caption="Vista previa del documento superior (Imagen)",
-          use_container_width=True,
-      )
-      st.info(
-          "📸 Imagen cargada como referencia visual. Para un cruce automático"
-          " detallado de servicios y horas, se recomienda usar Excel o PDF."
-      )
-      df_sup = pd.DataFrame(columns=["Nombre", "Servicio", "Horas"])
-
-    # 3. Realizar el Cruce de Datos manteniendo múltiples asignaciones
+    # 3. Cruce exacto uniendo por Nombre
     if not df_sup.empty and "Nombre" in df_sup.columns:
       resultado = pd.merge(
           df_base,
@@ -162,33 +169,37 @@ if file_base is not None and file_superior is not None:
 
     resultado["Servicio"] = resultado["Servicio"].fillna("DISPONIBLE")
     resultado["Horas"] = resultado["Horas"].fillna("-")
+    resultado["Novedad / Observación"] = ""
 
-    if "Novedad / Observación" not in resultado.columns:
-      resultado["Novedad / Observación"] = ""
+    # Reordenar columnas para que la Identificación y el Nombre queden al inicio, seguidos de inmediato por el Servicio y la Hora
+    cols_ordenadas = ["Identificación", "Nombre", "Servicio", "Horas"]
+    otras_cols = [
+        c
+        for c in resultado.columns
+        if c not in cols_ordenadas and c != "Novedad / Observación"
+    ]
+    resultado = resultado[cols_ordenadas + otras_cols + ["Novedad / Observación"]]
 
     st.markdown("---")
-    st.subheader("📊 Métricas Operativas de Fuerza")
-
+    st.subheader("📊 Métricas Operativas")
     total = len(df_base)
     asignados = len(resultado[resultado["Servicio"] != "DISPONIBLE"])
     disponibles = len(resultado[resultado["Servicio"] == "DISPONIBLE"])
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total Personal a Cargo", total)
-    m2.metric("Asignados a Servicio", asignados)
-    m3.metric("Disponibles en Base", disponibles)
+    m1.metric("Total Personal", total)
+    m2.metric("Asignados", asignados)
+    m3.metric("Disponibles", disponibles)
 
     st.markdown("---")
-    st.subheader(
-        "📝 Listado General, Disponibilidad, Horarios y Registro de Novedades"
-    )
+    st.subheader("📝 Listado General (Identificación, Nombre, Servicio y Horas)")
     st.info(
-        "💡 Si un efectivo tiene **dos o más servicios u horarios**, aparecerán"
-        " unidos por el símbolo `|`. Puedes escribir o ajustar cualquier"
-        " novedad de forma manual en la última columna."
+        "💡 Al lado de la Identificación y el Nombre verás reflejado el"
+        " **Servicio** y la **Hora** (si hay varios, separados por `|`). Puedes"
+        " editar las novedades abajo."
     )
 
-    # Tabla interactiva editable
+    # Tabla interactiva
     df_editado = st.data_editor(
         resultado,
         use_container_width=True,
@@ -202,18 +213,13 @@ if file_base is not None and file_superior is not None:
     # Botón de descarga
     csv_data = df_editado.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label="📥 Descargar Reporte Completo con Horarios (CSV)",
+        label="📥 Descargar Reporte Final (CSV)",
         data=csv_data,
-        file_name="reporte_servicios_y_horarios.csv",
+        file_name="reporte_identificacion_servicios.csv",
         mime="text/csv",
     )
 
   except Exception as e:
-    st.error(
-        f"Ocurrió un error al procesar el archivo. Detalle técnico: {e}"
-    )
+    st.error(f"Error procesando los archivos: {e}")
 else:
-  st.info(
-      "👆 Sube tu Listado Base en Excel y tu Orden del Superior (PDF o Excel)"
-      " para ver los servicios y horarios combinados."
-  )
+  st.info("👆 Carga tu Listado Base y tu Orden del Superior para ver el reporte.")
