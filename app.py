@@ -1,23 +1,91 @@
+import io
+import docx
 import pandas as pd
+from PIL import Image
+import pypdf
+import pytesseract
 import streamlit as st
 
 st.set_page_config(
     page_title="Control Policial de Servicios", layout="wide"
 )
 
-st.title("👮‍♂️ Control y Gestión de Servicios Policiales")
+st.title("👮‍♂️ Control y Gestión Avanzada de Servicios Policiales")
 st.write(
-    "Sistema de control de personal y recepción de documentos operativos"
-    " (Excel, PDF, Word, Imágenes)."
+    "Sistema inteligente con soporte de extracción para Excel, CSV, PDF, Word e"
+    " Imágenes (OCR)."
 )
 st.markdown("---")
+
+
+# Función inteligente para extraer texto o datos de CUALQUIER archivo
+def extraer_df(file):
+  filename = file.name.lower()
+  lineas = []
+
+  # 1. Excel / CSV
+  if filename.endswith((".xlsx", ".xls")):
+    df = pd.read_excel(file)
+    return df
+  elif filename.endswith(".csv"):
+    df = pd.read_csv(file)
+    return df
+
+  # 2. Archivos PDF
+  elif filename.endswith(".pdf"):
+    reader = pypdf.PdfReader(file)
+    texto_completo = ""
+    for page in reader.pages:
+      text = page.extract_text()
+      if text:
+        texto_completo += text + "\n"
+    lineas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+    return pd.DataFrame({"Nombre": lineas})
+
+  # 3. Documentos de Word (.docx)
+  elif filename.endswith(".docx"):
+    doc = docx.Document(file)
+    for p in doc.paragraphs:
+      if p.text.strip():
+        lineas.append(p.text.strip())
+    for table in doc.tables:
+      for row in table.rows:
+        celdas = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+        if celdas:
+          lineas.append(" ".join(celdas))
+    return pd.DataFrame({"Nombre": lineas})
+
+  # 4. Imágenes (PNG / JPG / JPEG) mediante OCR
+  elif filename.endswith((".png", ".jpg", ".jpeg")):
+    try:
+      imagen = Image.open(file)
+      # Extraer texto de la imagen usando OCR
+      texto_ocr = pytesseract.image_to_string(imagen)
+      lineas = [l.strip() for l in texto_ocr.split("\n") if l.strip()]
+
+      # Mostrar vista previa de la imagen procesada
+      st.image(
+          imagen,
+          caption=f"Imagen procesada por OCR: {file.name}",
+          use_container_width=True,
+      )
+    except Exception as e:
+      st.warning(
+          f"No se pudo extraer texto automáticamente de la imagen {file.name}."
+          f" Error: {e}"
+      )
+
+    return pd.DataFrame({"Nombre": lineas})
+
+  return pd.DataFrame(columns=["Nombre"])
+
 
 col1, col2 = st.columns(2)
 
 with col1:
   st.subheader("1. Listado Base de Personal")
   file_base = st.file_uploader(
-      "Sube tu personal (Excel, CSV, PDF, Word, Imágenes)",
+      "Sube personal (Excel, CSV, PDF, Word, Imagen)",
       type=["xlsx", "xls", "csv", "pdf", "docx", "png", "jpg", "jpeg"],
       key="base",
   )
@@ -25,93 +93,75 @@ with col1:
 with col2:
   st.subheader("2. Orden de Servicios / Documento Superior")
   file_superior = st.file_uploader(
-      "Sube órdenes (Excel, CSV, PDF, Word, Imágenes)",
+      "Sube orden (Excel, CSV, PDF, Word, Imagen)",
       type=["xlsx", "xls", "csv", "pdf", "docx", "png", "jpg", "jpeg"],
       key="superior",
   )
 
 if file_base is not None and file_superior is not None:
   try:
-    base_name = file_base.name.lower()
-    sup_name = file_superior.name.lower()
+    with st.spinner(
+        "Procesando y extrayendo información de los documentos..."
+    ):
+      df_base = extraer_df(file_base)
+      df_sup = extraer_df(file_superior)
 
-    # Validar si ambos son tabulares (Excel o CSV) para hacer el cruce automático
-    is_base_tabular = base_name.endswith((".xlsx", ".xls", ".csv"))
-    is_sup_tabular = sup_name.endswith((".xlsx", ".xls", ".csv"))
+      # Asegurar formato en la columna Nombre
+      if "Nombre" not in df_base.columns and not df_base.empty:
+        df_base.columns = ["Nombre"] + list(df_base.columns[1:])
+      if "Nombre" not in df_sup.columns and not df_sup.empty:
+        df_sup.columns = ["Nombre"] + list(df_sup.columns[1:])
 
-    if is_base_tabular and is_sup_tabular:
-      # Lectura de listado base
-      if base_name.endswith(".csv"):
-        df_base = pd.read_csv(file_base)
+      if not df_base.empty:
+        df_base["Nombre"] = (
+            df_base["Nombre"].astype(str).str.strip().str.upper()
+        )
+
+      if not df_sup.empty:
+        df_sup["Nombre"] = (
+            df_sup["Nombre"].astype(str).str.strip().str.upper()
+        )
+        if "Servicio" not in df_sup.columns:
+          df_sup["Servicio"] = "ASIGNADO (DOCUMENTO)"
+        if "Horas" not in df_sup.columns:
+          df_sup["Horas"] = "-"
       else:
-        df_base = pd.read_excel(file_base)
+        df_sup = pd.DataFrame(columns=["Nombre", "Servicio", "Horas"])
 
-      # Lectura de orden superior
-      if sup_name.endswith(".csv"):
-        df_sup = pd.read_csv(file_superior)
-      else:
-        df_sup = pd.read_excel(file_superior)
-
-      df_base["Nombre"] = df_base["Nombre"].astype(str).str.strip().str.upper()
-      df_sup["Nombre"] = df_sup["Nombre"].astype(str).str.strip().str.upper()
-
+      # Cruce automático de datos
       resultado = pd.merge(df_base, df_sup, on="Nombre", how="left")
       resultado["Servicio"] = resultado["Servicio"].fillna("DISPONIBLE")
       resultado["Horas"] = resultado["Horas"].fillna("-")
       resultado["Novedad / Observación"] = ""
 
-      st.markdown("---")
-      st.subheader("📊 Métricas Operativas")
-      total = len(df_base)
-      asignados = len(resultado[resultado["Servicio"] != "DISPONIBLE"])
-      disponibles = len(resultado[resultado["Servicio"] == "DISPONIBLE"])
+    st.markdown("---")
+    st.subheader("📊 Métricas Operativas")
 
-      m1, m2, m3 = st.columns(3)
-      m1.metric("Total Personal", total)
-      m2.metric("Asignados", asignados)
-      m3.metric("Disponibles", disponibles)
+    total = len(df_base)
+    asignados = len(resultado[resultado["Servicio"] != "DISPONIBLE"])
+    disponibles = len(resultado[resultado["Servicio"] == "DISPONIBLE"])
 
-      st.markdown("---")
-      st.subheader("📝 Listado General y Novedades")
-      df_editado = st.data_editor(resultado, use_container_width=True)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Personal", total)
+    m2.metric("Asignados", asignados)
+    m3.metric("Disponibles", disponibles)
 
-      csv_data = df_editado.to_csv(index=False).encode("utf-8")
-      st.download_button(
-          label="📥 Descargar Reporte Final (CSV)",
-          data=csv_data,
-          file_name="reporte_policial.csv",
-          mime="text/csv",
-      )
+    st.markdown("---")
+    st.subheader("📝 Tabla de Resultados y Control de Novedades")
+    df_editado = st.data_editor(resultado, use_container_width=True)
 
-    else:
-      # Si alguno de los dos es PDF, Word o Imagen
-      st.markdown("---")
-      st.success("📁 ¡Documentos recibidos con éxito en el sistema!")
-
-      c_info1, c_info2 = st.columns(2)
-      with c_info1:
-        st.info(f"**Listado Base:** {file_base.name}")
-        if base_name.endswith((".png", ".jpg", ".jpeg")):
-          st.image(file_base, use_container_width=True)
-
-      with c_info2:
-        st.info(f"**Orden Superior:** {file_superior.name}")
-        if sup_name.endswith((".png", ".jpg", ".jpeg")):
-          st.image(file_superior, use_container_width=True)
-
-      st.warning(
-          "ℹ️ Has adjuntado documentos en formato PDF, Word o Imagen. Para"
-          " realizar el cruce automático de nombres y horas, recuerda que"
-          " ambos archivos principales deben ser Excel (.xlsx) o CSV."
-      )
+    csv_data = df_editado.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Descargar Reporte Final (CSV)",
+        data=csv_data,
+        file_name="reporte_policial_cruce.csv",
+        mime="text/csv",
+    )
 
   except Exception as e:
-    st.error(
-        f"Ocurrió un error al procesar los archivos. Asegúrate de que las"
-        f" tablas contengan la columna 'Nombre'. Detalle técnico: {e}"
-    )
+    st.error(f"Ocurrió un error al procesar el cruce de archivos: {e}")
 else:
   st.info(
-      "👆 Sube ambos archivos (Listado Base y Orden del Superior) para"
-      " comenzar."
+      "👆 Sube tus dos archivos en cualquier combinación (Excel, PDF, Word, Foto"
+      " escaneada) para realizar el cruce automático."
   )
