@@ -7,8 +7,8 @@ st.set_page_config(
 
 st.title("👮‍♂️ Control y Gestión de Servicios Policiales")
 st.write(
-    "Sistema de cruce de personal y recepción de documentos operativos (Excel,"
-    " PDF, Word, Imágenes)."
+    "Sistema de control de personal y recepción de documentos operativos"
+    " (Excel, PDF, Word, Imágenes)."
 )
 st.markdown("---")
 
@@ -17,36 +17,42 @@ col1, col2 = st.columns(2)
 with col1:
   st.subheader("1. Listado Base de Personal")
   file_base = st.file_uploader(
-      "Sube tu personal (Excel o CSV)", type=["xlsx", "xls", "csv"], key="base"
+      "Sube tu personal (Excel, CSV, PDF, Word, Imágenes)",
+      type=["xlsx", "xls", "csv", "pdf", "docx", "png", "jpg", "jpeg"],
+      key="base",
   )
 
 with col2:
   st.subheader("2. Orden de Servicios / Documento Superior")
   file_superior = st.file_uploader(
-      "Sube órdenes en Excel, PDF, Word o Imágenes",
+      "Sube órdenes (Excel, CSV, PDF, Word, Imágenes)",
       type=["xlsx", "xls", "csv", "pdf", "docx", "png", "jpg", "jpeg"],
       key="superior",
   )
 
 if file_base is not None and file_superior is not None:
   try:
-    # Lectura del listado base
-    if file_base.name.endswith(".csv"):
-      df_base = pd.read_csv(file_base)
-    else:
-      df_base = pd.read_excel(file_base)
-
-    df_base["Nombre"] = df_base["Nombre"].astype(str).str.strip().str.upper()
-
+    base_name = file_base.name.lower()
     sup_name = file_superior.name.lower()
 
-    # Validar si el superior subió un Excel/CSV para hacer cruce automático
-    if sup_name.endswith((".xlsx", ".xls", ".csv")):
+    # Validar si ambos son tabulares (Excel o CSV) para hacer el cruce automático
+    is_base_tabular = base_name.endswith((".xlsx", ".xls", ".csv"))
+    is_sup_tabular = sup_name.endswith((".xlsx", ".xls", ".csv"))
+
+    if is_base_tabular and is_sup_tabular:
+      # Lectura de listado base
+      if base_name.endswith(".csv"):
+        df_base = pd.read_csv(file_base)
+      else:
+        df_base = pd.read_excel(file_base)
+
+      # Lectura de orden superior
       if sup_name.endswith(".csv"):
         df_sup = pd.read_csv(file_superior)
       else:
         df_sup = pd.read_excel(file_superior)
 
+      df_base["Nombre"] = df_base["Nombre"].astype(str).str.strip().str.upper()
       df_sup["Nombre"] = df_sup["Nombre"].astype(str).str.strip().str.upper()
 
       resultado = pd.merge(df_base, df_sup, on="Nombre", how="left")
@@ -78,31 +84,34 @@ if file_base is not None and file_superior is not None:
       )
 
     else:
-      # Si sube PDF, Word o Imagen como orden de servicio adjunta
+      # Si alguno de los dos es PDF, Word o Imagen
       st.markdown("---")
-      st.success(
-          f"📁 Documento adjunto recibido correctamente: **{file_superior.name}**"
-      )
+      st.success("📁 ¡Documentos recibidos con éxito en el sistema!")
 
-      if sup_name.endswith((".png", ".jpg", ".jpeg")):
-        st.image(
-            file_superior,
-            caption="Vista previa de la orden / documento",
-            use_container_width=True,
-        )
-      else:
-        st.info(
-            "El archivo PDF o Word se ha almacenado en la sesión. Para hacer"
-            " el cruce automático de nombres y horas, recuerda utilizar un"
-            " archivo Excel o CSV en la orden del superior."
-        )
+      c_info1, c_info2 = st.columns(2)
+      with c_info1:
+        st.info(f"**Listado Base:** {file_base.name}")
+        if base_name.endswith((".png", ".jpg", ".jpeg")):
+          st.image(file_base, use_container_width=True)
+
+      with c_info2:
+        st.info(f"**Orden Superior:** {file_superior.name}")
+        if sup_name.endswith((".png", ".jpg", ".jpeg")):
+          st.image(file_superior, use_container_width=True)
+
+      st.warning(
+          "ℹ️ Has adjuntado documentos en formato PDF, Word o Imagen. Para"
+          " realizar el cruce automático de nombres y horas, recuerda que"
+          " ambos archivos principales deben ser Excel (.xlsx) o CSV."
+      )
 
   except Exception as e:
     st.error(
-        f"Ocurrió un error al procesar los archivos. Detalle técnico: {e}"
+        f"Ocurrió un error al procesar los archivos. Asegúrate de que las"
+        f" tablas contengan la columna 'Nombre'. Detalle técnico: {e}"
     )
 else:
   st.info(
-      "👆 Sube tu listado base y el documento del superior para habilitar el"
-      " sistema."
+      "👆 Sube ambos archivos (Listado Base y Orden del Superior) para"
+      " comenzar."
   )
